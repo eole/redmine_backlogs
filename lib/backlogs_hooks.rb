@@ -80,40 +80,8 @@ module BacklogsPlugin
         end
       end
 
-      def view_issues_show_details_bottom(context={ })
-        begin
-          issue = context[:issue]
+      render_on :view_issues_show_details_bottom, :partial => 'hooks/view_issues_show_details_bottom'
 
-          return '' unless Backlogs.configured?(issue.project)
-
-          snippet = ''
-
-          project = context[:project]
-
-          snippet += "<tr><th>#{l(:field_story_points)}</th><td>#{RbStory.find(issue.id).points_display}</td>"
-          if issue.is_story?
-            snippet += "</tr>"
-            vbe = issue.velocity_based_estimate
-            snippet += "<tr><th>#{l(:field_velocity_based_estimate)}</th><td>#{vbe ? vbe.to_s + ' days' : '-'}</td></tr>"
-
-            unless issue.release_id.nil?
-              release = RbRelease.find(issue.release_id)
-              snippet += "<tr><th>#{l(:field_release)}</th><td>#{link_to(release.name, url_for_prefix_in_hooks + url_for({:controller => 'rb_releases', :action => 'show', :release_id => release}))}</td>"
-              relation_translate = l("label_release_relationship_#{RbStory.find(issue.id).release_relationship}")
-              snippet += "<th>#{l(:field_release_relationship)}</th><td>#{relation_translate}</td></tr>"
-            end
-          end
-
-#          if issue.is_task? && User.current.allowed_to?(:update_remaining_hours, project) != nil
-#            snippet += "<tr><th>#{l(:field_remaining_hours)}</th><td>#{issue.remaining_hours}</td></tr>"
-#          end
-
-          return snippet
-        rescue => e
-          exception(context, e)
-          return ''
-        end
-      end
 
       def view_issues_form_details_bottom(context={ })
         begin
@@ -128,16 +96,15 @@ module BacklogsPlugin
           #developers = select_tag("time_entry[user_id]", options_from_collection_for_select(developers, :id, :name, User.current.id))
           #developers = developers.gsub(/\n/, '')
 
-          snippet += '<p>'
-          #snippet += context[:form].label(:story_points)
-          if Backlogs.setting[:story_points].blank?
-            snippet += context[:form].text_field(:story_points, :size => 3)
-          else
-            snippet += context[:form].select(:story_points, options_for_select(Backlogs.setting[:story_points].split(',').map(&:to_f), issue.story_points.try(:to_f).try(:to_s)), include_blank: true)
-          end
-          snippet += '</p>'
-            
           if issue.is_story?
+            snippet += '<p>'
+            #snippet += context[:form].label(:story_points)
+            if Backlogs.setting[:story_points].blank?
+              snippet += context[:form].text_field(:story_points, :size => 3)
+            else
+              snippet += context[:form].select(:story_points, options_for_select(Backlogs.setting[:story_points].split(',').map(&:to_f), issue.story_points.try(:to_f).try(:to_s)), include_blank: true)
+            end
+            snippet += '</p>'
 
             if issue.safe_attribute?('release_id') && issue.assignable_releases.any?
               snippet += '<div class="splitcontentleft"><p>'
@@ -171,25 +138,17 @@ module BacklogsPlugin
             snippet += "<p><label for='link_to_original'>#{l(:rb_label_link_to_original)}</label>"
             snippet += "#{check_box_tag('link_to_original', params[:copy_from], true)}</p>"
 
-            snippet += "<p><label>#{
-              if Backlogs.setting[:copy_tasks_action] == 'move'
-                l(:rb_label_move_tasks)
-              else
-                l(:rb_label_copy_tasks)
-              end
-            }</label>"
-
-            snippet += "#{radio_button_tag('copy_tasks', 'open:' + params[:copy_from], Backlogs.setting[:copy_tasks_default]=='open')} #{l(:rb_label_copy_tasks_open)}<br />"
-            snippet += "#{radio_button_tag('copy_tasks', 'closed:' + params[:copy_from], Backlogs.setting[:copy_tasks_default]=='closed')} #{l(:rb_label_copy_tasks_closed)}<br />"
-            snippet += "#{radio_button_tag('copy_tasks', 'none', Backlogs.setting[:copy_tasks_default]=='none')} #{l(:rb_label_copy_tasks_none)}<br />"
-            snippet += "#{radio_button_tag('copy_tasks', 'all:' + params[:copy_from], Backlogs.setting[:copy_tasks_default]=='all')} #{l(:rb_label_copy_tasks_all)}</p>"
+            snippet += "<p><label>#{l(:rb_label_copy_tasks)}</label>"
+            snippet += "#{radio_button_tag('copy_tasks', 'open:' + params[:copy_from], true)} #{l(:rb_label_copy_tasks_open)}<br />"
+            snippet += "#{radio_button_tag('copy_tasks', 'none', false)} #{l(:rb_label_copy_tasks_none)}<br />"
+            snippet += "#{radio_button_tag('copy_tasks', 'all:' + params[:copy_from], false)} #{l(:rb_label_copy_tasks_all)}</p>"
           end
 
-#          if issue.is_task? && !issue.new_record?
-#            snippet += "<p><label for='remaining_hours'>#{l(:field_remaining_hours)}</label>"
-#            snippet += text_field_tag('remaining_hours', issue.remaining_hours, :size => 3)
-#            snippet += '</p>'
-#          end
+          if issue.is_task? && !issue.new_record?
+            snippet += "<p><label for='remaining_hours'>#{l(:field_remaining_hours)}</label>"
+            snippet += text_field_tag('remaining_hours', issue.remaining_hours, :size => 3)
+            snippet += '</p>'
+          end
 
           return snippet
         rescue => e
@@ -344,8 +303,6 @@ module BacklogsPlugin
               case action
                 when 'open'
                   tasks = story.tasks.select{|t| !t.reload.closed?}
-                when 'closed'
-                  tasks = story.tasks.reject{|t| !t.reload.closed?}
                 when 'none'
                   tasks = []
                 when 'all'
@@ -354,30 +311,13 @@ module BacklogsPlugin
                   raise "Unexpected value #{params[:copy_tasks]}"
               end
 
-              if Backlogs.setting[:copy_tasks_action] == 'move'
-                tasks.each {|t|
-                  #
-                  # Update parent_issue_id as a Task, because it will fail if
-                  # we try to perform the update as an Issue.  The consequence
-                  # of this is that it does not create an entry in the Journal.
-                  #
-                  # We also skip validation, otherwise we would get a "parent
-                  # task is invalid" error.
-                  #
-                  t.reload.update_attribute(:parent_issue_id, issue.id)
-                }
-              else
-                tasks.each {|t|
-                  nt = Issue.new
-                  nt.copy_from(t)
-                  nt.parent_issue_id = issue.id
-                  nt.position = nil # will assign a new position
-                  nt.save!
-                }
-              end
-
-              # In case the new story only has closed tasks, make sure it is closed.
-              context[:issue].becomes(RbStory).story_follow_task_state
+              tasks.each {|t|
+                nt = Issue.new
+                nt.copy_from(t)
+                nt.parent_issue_id = issue.id
+                nt.position = nil # will assign a new position
+                nt.save!
+              }
             end
           end
         end
